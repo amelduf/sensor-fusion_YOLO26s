@@ -110,4 +110,59 @@ def print_comparison_3(baseline_res, saf_res, early_res):
         print("  %-20s │ %-20s │ %-20s │ %-20s" % (m, fmt(b), fmt(s), fmt(e)))
     print("═" * 85)
 
-# [Execution blocks (Main, Train, Eval) similar to previous baseline scripts]
+if __name__ == '__main__':
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config',  default='SAF_YOLO26.yaml')
+    parser.add_argument('--variant', default='yolo26s',
+                        choices=['yolo26n', 'yolo26s', 'yolo26m'])
+    parser.add_argument('--mode',    default='train',
+                        choices=['train', 'eval'])
+    parser.add_argument('--weights', default='./runs/multiscale_fusion/best.pt')
+    parser.add_argument('--resume',  default=None)
+    parser.add_argument('--split',   default='test',
+                        choices=['train', 'val', 'test'])
+    parser.add_argument('--conf',    type=float, default=0.01)
+    parser.add_argument('--batch',   type=int,   default=16)
+    parser.add_argument('--workers', type=int,   default=4)
+    args = parser.parse_args()
+
+    cfg    = yaml.safe_load(open(args.config))
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print("Device :", device)
+    print("Mode   :", args.mode)
+
+    if args.mode == 'train':
+        train(cfg, device, resume=args.resume, variant=args.variant)
+
+    elif args.mode == 'eval':
+        data_cfg = cfg['data']
+        norm_cfg = cfg['normalization']
+        model = MultiScaleFusion(variant=args.variant, pretrained=False).to(device)
+        ckpt  = torch.load(args.weights, map_location=device)
+        model.load_state_dict(ckpt['model'])
+        print("Weights loaded from epoch %d" % (ckpt.get('epoch', 0) + 1))
+
+        datadir = os.path.dirname(
+            data_cfg['train_cam'].rstrip('/').rsplit('/', 1)[0])
+        dataset = FusionDataset(datadir, args.split,
+                                img_size=cfg['train'].get('img_size', 640),
+                                cam_mean=norm_cfg.get('cam_mean'),
+                                cam_std =norm_cfg.get('cam_std'),
+                                radar_mean=norm_cfg.get('radar_mean'),
+                                radar_std =norm_cfg.get('radar_std'))
+        dl = DataLoader(dataset, batch_size=args.batch, shuffle=False,
+                        num_workers=args.workers, collate_fn=collate_fn,
+                        pin_memory=True)
+        print("Evaluating on %d images (%s split)" % (len(dataset), args.split))
+
+        results = evaluate_model(model, dl, device,
+                                 conf_thres=args.conf,
+                                 img_size=cfg['train'].get('img_size', 640))
+        if results:
+            print_results(results, variant='multiscale_fusion', split=args.split)
+            os.makedirs('./runs/eval', exist_ok=True)
+            save_results_csv(results,
+                             './runs/eval/results_multiscale_%s.csv' % args.split,
+                             'multiscale_fusion', args.split)
