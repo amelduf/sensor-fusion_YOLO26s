@@ -1,0 +1,111 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# SAF-YOLO26 Configuration: Spatial Attention Fusion + YOLO26
+# Reference: Chang et al., Sensors 2020
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Data Paths ──
+data:
+  # Training Set
+  train_cam:    /YOUR PATH/images/train
+  train_radar:  /YOUR PATH/images_radar/train
+  train_labels: /YOUR PATH/labels/train
+
+  # Validation Set
+  val_cam:      /YOUR PATH/images/val
+  val_radar:    /YOUR PATH/images_radar/val
+  val_labels:   /YOUR PATH/yolo/labels/val
+
+  # Test Set
+  test_cam:     /YOUR PATH/images/test
+  test_radar:   /YOUR PATH/images_radar/test
+  test_labels:  /YOUR PATH/labels/test
+
+  nc: 1                         # Number of classes
+  names: ['vehicle']            # Class names
+
+# ── Model Architecture ──
+model:
+  backbone_vision: yolo26s.pt   # Pre-trained weights for Vision Backbone
+  pretrained: true              # Load weights from backbone_vision
+  img_size: 640                 # Input dimensions (Camera & Radar)
+
+  # Lightweight Radar Branch
+  radar_branch:
+    stem_channels: [3, 16, 32]         # Initial Conv layers (3→16→32)
+    block_channels: [32, 64, 128, 256]  # Successive Conv layers with stride=2
+    bottleneck_channels: 64            # Residual block channels
+    proj_channels: 256                 # Final projection to match P5 dimensions
+
+  # SAF (Spatial Attention Fusion) Block
+  saf:
+    in_channels: 256            # Input channels from Radar/Vision P5
+    kernels: [1, 3, 5]          # Parallel convolution kernel sizes
+    # Process: Multi-kernel sum + Sigmoid activation
+
+# ── Training Hyperparameters ──
+train:
+  epochs: 300                   # Maximum epochs (Early stopping may trigger sooner)
+  batch_size: 16
+  img_size: 640
+  workers: 8
+  device: cuda                  # Options: 'cuda' or 'cpu'
+  pretrained: true              # Use weights for the vision part
+
+  early_stopping:
+    patience: 30                # Epochs to wait without improvement
+    min_delta: 0.001            # Minimum change to qualify as an improvement
+
+  # SGD Optimizer (as per the original paper)
+  optimizer:
+    type: SGD
+    lr: 0.01
+    momentum: 0.9
+    weight_decay: 0.0001
+
+  # Learning Rate Scheduler
+  scheduler:
+    type: CosineAnnealingLR
+    T_max: 300                  # Cycle length (usually set to total epochs)
+
+  # Warmup Phase
+  warmup:
+    epochs: 3
+    lr_start: 0.001
+
+  # Stability & Logging
+  grad_clip: 10.0               # Prevents gradients from exploding on sparse radar data
+  outdir: ./runs/saf_yolo26     # Output directory for weights and logs
+  save_every: 10                # Frequency of intermediate checkpoints
+
+# ── Data Augmentation ──
+augmentation:
+  # Camera Augmentations
+  cam_hsv_h: 0.015
+  cam_hsv_s: 0.7
+  cam_hsv_v: 0.4
+  cam_flipud: 0.0
+  cam_fliplr: 0.5
+  cam_mosaic: 1.0               # Vision mosaic is beneficial
+  cam_scale: 0.5
+  cam_translate: 0.1
+
+  # Radar Augmentations (Limited to preserve sparsity patterns)
+  radar_fliplr: 0.5             # Horizontal flip allowed
+  radar_flipud: 0.0             # Vertical flip disabled (unnatural for ground radar)
+  radar_mosaic: 0.0             # Mosaic disabled (would corrupt point cloud sparsity)
+  radar_hsv: 0.0                # Color shifts disabled for encoded radar images
+
+# ── Normalization Stats ──
+normalization:
+  cam_mean: [0.485, 0.456, 0.406]
+  cam_std:  [0.229, 0.224, 0.225]
+  # Custom stats calculated for encoded radar images
+  radar_mean: [0.0031, 0.0029, 0.0025]
+  radar_std:  [0.0476, 0.0446, 0.0380]
+
+# ── Evaluation ──
+eval:
+  iou_threshold: 0.5
+  conf_threshold: 0.25
+  max_det: 100
+  metrics: [AP, AP50, AP75, APs, APm, APl] # MS COCO standard metrics
